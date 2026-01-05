@@ -6,9 +6,9 @@ from io import BytesIO
 import zipfile
 
 # --- 页面配置 ---
-st.set_page_config(page_title="细胞划痕分析 Pro (自定义颜色版)", layout="wide")
+st.set_page_config(page_title="细胞划痕分析 Pro", layout="wide")
 
-st.title("🔬 细胞划痕分析 Pro (自定义颜色 + T0对比)")
+st.title("🔬 细胞划痕分析 Pro (T0对比)")
 
 # --- 核心算法 ---
 def analyze_scratch(image_file, sigma=15, thresh_offset=0, min_area=1000, 
