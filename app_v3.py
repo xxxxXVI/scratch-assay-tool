@@ -6,21 +6,19 @@ from io import BytesIO
 import zipfile
 
 # --- 页面配置 ---
-st.set_page_config(page_title="细胞划痕分析 Pro (可视化修复版)", layout="wide")
+st.set_page_config(page_title="细胞划痕分析 Pro (自定义颜色版)", layout="wide")
 
-st.title("🔬 细胞划痕分析 Pro (T0对比)")
+st.title("🔬 细胞划痕分析 Pro (自定义颜色 + T0对比)")
 
 # --- 核心算法 ---
 def analyze_scratch(image_file, sigma=15, thresh_offset=0, min_area=1000, 
-                    keep_only_largest=True, line_thickness=2):
+                    keep_only_largest=True, line_thickness=2, line_color=(0, 255, 255)):
     
     # 1. 读取
-    # 每次读取前重置指针，防止多次调用报错
     image_file.seek(0)
     file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
     original_img = cv2.imdecode(file_bytes, 1)
     
-    # 安全检查：防止空文件报错
     if original_img is None:
         return None, None, None, 0, 0, 0
 
@@ -55,7 +53,8 @@ def analyze_scratch(image_file, sigma=15, thresh_offset=0, min_area=1000,
     cv2.drawContours(clean_mask, valid_contours, -1, 255, thickness=cv2.FILLED)
 
     annotated_img = original_img.copy()
-    cv2.drawContours(annotated_img, valid_contours, -1, (0, 255, 255), thickness=line_thickness, lineType=cv2.LINE_AA)
+    # 使用传入的 line_color 进行描边
+    cv2.drawContours(annotated_img, valid_contours, -1, line_color, thickness=line_thickness, lineType=cv2.LINE_AA)
 
     height, width = clean_mask.shape
     total_pixels = height * width
@@ -86,30 +85,36 @@ with st.sidebar:
     smart_mode = st.checkbox("✅ 只保留主划痕 (推荐)", value=True)
     p_sigma = st.slider("纹理模糊度", 1, 50, 15)
     p_thresh = st.slider("阈值修正", -50, 50, 0)
-    p_min_area = st.number_input("最小面积过滤", value=1000)
-    line_thick = st.slider("描边粗细", 1, 5, 2)
+    
+    with st.expander("🎨 作图外观设置", expanded=True):
+        # 颜色选择器 (默认黄色)
+        color_hex = st.color_picker("描边颜色", "#FFFF00")
+        line_thick = st.slider("描边粗细", 1, 5, 2)
+        
+        # 将 Hex (#RRGGBB) 转为 OpenCV 需要的 BGR ((B, G, R))
+        hex_val = color_hex.lstrip('#')
+        rgb_tuple = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
+        bgr_color = (rgb_tuple[2], rgb_tuple[1], rgb_tuple[0]) # 转为 BGR
 
 # --- 主逻辑 ---
 if uploaded_files and baseline_file:
     
-    # === 1. 实时预览区域 (修复回来的部分！) ===
+    # === 1. 实时预览区域 ===
     st.subheader(f"👁️ 参数调试预览 (当前显示: {baseline_file.name})")
     
-    # 分析选中的 T0 图片
-    # 注意：这里调用函数用于显示，下面批量分析时会再次调用
+    # 传入 bgr_color
     _, t0_mask, t0_anno, t0_area, t0_width, t0_pixels = analyze_scratch(
-        baseline_file, p_sigma, p_thresh, p_min_area, smart_mode, line_thick
+        baseline_file, p_sigma, p_thresh, 1000, smart_mode, line_thick, bgr_color
     )
     
-    # 显示三栏布局：原图描边 | 掩膜 | 数据
     col_p1, col_p2, col_p3 = st.columns([2, 2, 1])
     
     with col_p1:
-        st.image(t0_anno, channels="BGR", caption="识别结果 (黄色描边)", use_container_width=True)
+        st.image(t0_anno, channels="BGR", caption="识别结果 (自定义颜色)", use_container_width=True)
     with col_p2:
         st.image(t0_mask, caption="计算掩膜 (Mask)", use_container_width=True)
     with col_p3:
-        st.info("调整左侧滑块，\n直到此处识别准确。")
+        st.info("调整左侧颜色和滑块，\n直到效果满意。")
         st.metric("T0 面积占比", f"{t0_area:.2f}%")
         st.metric("T0 初始宽度", f"{t0_width:.1f} px")
 
@@ -125,12 +130,12 @@ if uploaded_files and baseline_file:
         with zipfile.ZipFile(zip_buffer, "w") as zf:
             for i, file in enumerate(uploaded_files):
                 
-                # 运行分析
+                # 传入 bgr_color
                 _, _, res_img, res_area, res_width, res_pixels = analyze_scratch(
-                    file, p_sigma, p_thresh, p_min_area, smart_mode, line_thick
+                    file, p_sigma, p_thresh, 1000, smart_mode, line_thick, bgr_color
                 )
                 
-                if res_img is None: continue # 跳过坏图
+                if res_img is None: continue 
 
                 # 计算愈合率
                 if t0_pixels > 0:
@@ -138,7 +143,6 @@ if uploaded_files and baseline_file:
                 else:
                     healing_rate = 0.0
                 
-                # 存数据
                 results.append({
                     "文件名": file.name,
                     "划痕面积占比(%)": round(res_area, 2),
@@ -155,19 +159,15 @@ if uploaded_files and baseline_file:
         
         # 结果展示
         df = pd.DataFrame(results).sort_values(by="文件名")
-        
         st.success("✅ 分析完成！")
         
-        # 高亮表格
         st.dataframe(
             df.style.highlight_max(axis=0, subset=["愈合率(%)"], color="#90EE90"), 
             use_container_width=True
         )
         
-        # 简单图表
         st.line_chart(df, x="文件名", y="愈合率(%)")
         
-        # 下载
         col_d1, col_d2 = st.columns(2)
         with col_d1:
             st.download_button("📄 下载数据表 (CSV)", df.to_csv(index=False).encode('utf-8-sig'), "report.csv", "text/csv")
